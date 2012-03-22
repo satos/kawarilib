@@ -1,0 +1,137 @@
+=kis
+# \0と\1で同時に違う内容の発話を生成するコマンド「SynchronizedTalk」
+# 書式   : $(SynchronizedTalk 引数1 引数2 [引数3...])
+# 第1引数: \0側の発話内容
+# 第2引数: \1側の発話内容
+# 第3引数以降: 各スコープの発話内容(省略可能)
+# 戻り値 : 同時発話するスクリプト
+# 機能   : \0側と\1側のトークを一文字ごとに切り出し、スコープ切替を挟んで
+#          繋げて返す
+# 備考   : sslex_char_atを内部で使用しているので、発話内容にさくらスクリプトが
+#          含まれていても正常動作する
+function SynchronizedTalk $(
+	if $[ $(size @arg) < 3 ] $(return);
+
+	clear @arg[0];
+	setstr @scope 0;
+	loop $(size @arg) $(
+		# 以降、各スコープに関する初期化
+		# 文字列ポインタ初期化
+		setstr @p[${@scope}] 0;
+		# スコープタグ初期化
+		setstr @prefix[${@scope}] $(
+			if $[ ${@scope} <= 1 ]
+				"\\"${@scope}
+			else
+				"\\p["${@scope}"]"
+		);
+		inc @scope;
+	);
+
+	#すべての文字を表示しきるまでループ
+	setstr @cond 0;
+	setstr @lastscope $(NULL);
+	until $[ ${@cond} == $(size @arg) ] $(
+		setstr @cond 0;
+		setstr @scope 0;
+		loop $(size @arg) $(
+			clear @char;
+			setstr @char $(sslex_char_at $@arg[${@scope}] $@p[${@scope}]);
+			setstr @p[${@scope}] $[ $@p[${@scope}] + $(length ${@char}) ];
+			if $[ ${@char} != "" ] $(
+				# まだ末尾に達しておらず、文字がある
+				if $[ ${@scope} != ${@lastscope} ] $(
+					# 直前に文字があったスコープと違うならスコープ切り替え
+					pushstr @talk $@prefix[${@scope}];
+					setstr @lastscope ${@scope};
+				);
+				pushstr @talk ${@char};
+			);
+			# 終了条件を計算
+			if $[ $@p[${@scope}] >= $(length $@arg[${@scope}]) ] $(inc @cond);
+			inc @scope;
+		);
+	);
+
+	# まとめて出力
+	return $(get @talk);
+);
+=end
+
+
+=kis
+# さくらスクリプトを意識した文字切り出しコマンド「sslex_char_at」
+# 書式   : $(sslex_char_at \s[4]ついてないなあ…。 5)
+# 第1引数: 切り出し対象文字列
+# 第2引数: 切り出す位置
+# 戻り値 : 1文字もしくは1タグ
+# 機能   : 文字列をさくらスクリプトを意識して解析し、指定位置がタグ以外なら
+#          そこの1文字、タグならタグ全体を返す。
+# 備考   : 解析は指定位置から開始するので注意のこと
+# 履歴   : 2003/1/7 初版
+#          2002/1/9 \n[half]、\_aに対応、ほぼ汎用化
+function sslex_char_at $(
+	if $[ $(size @arg) != 3 ] $(return);
+
+	setstr @str $(substr $@arg[1] $@arg[2]);
+	if $[ $(char_at ${@str} 0) == "\\" ] $(
+		# 「\」で始まるさくらスクリプト
+		if $[ $(char_at ${@str} 1) == "w" ] $(
+			# \wタグ
+			return "\\w"$(char_at ${@str} 2);
+		) else if $[ $(char_at ${@str} 1) == "n" ] $(
+			# \nタグ
+			if $[ $(char_at ${@str} 2) == "[" ] $(
+				# \n[half]
+				setstr @len $(match ${@str} "]");
+				if $[ ${@len} == -1 ] $(setstr @len $[ $(length ${@str}) - 1 ]);
+				return "\\"$(substr ${@str} 1 ${@len});
+			) else $(
+				# ただの\n
+				return "\\n";
+			);
+		) else if $[ $(find sslex_char_at.onechar $(char_at ${@str} 1)) >= 0 ] $(
+			# 1文字タグ
+			return "\\"$(char_at ${@str} 1);
+		) else if $[ $(find sslex_char_at.bracket $(char_at ${@str} 1)) >= 0 ] $(
+			# []で閉じるタグ
+			setstr @len $(match ${@str} "]");
+			if $[ ${@len} == -1 ] $(setstr @len $[ $(length ${@str}) - 1 ]);
+			return "\\"$(substr ${@str} 1 ${@len});
+		) else if $[ $(char_at ${@str} 1) == "_" ] $(
+			# 「_」で始まるタグ
+			if $[ $(char_at ${@str} 2) == "a" ] $(
+				# \_aタグ
+				if $[ $(char_at ${@str} 3) == "[" ] $(
+					# \_a[]
+					setstr @len $(match ${@str} "]");
+					if $[ ${@len} == -1 ] $(setstr @len $[ $(length ${@str}) - 1 ]);
+					return "\\"$(substr ${@str} 1 ${@len});
+				) else $(
+					# \_aのみ
+					return  "\\_a";
+				);
+			) else if $[ $(find sslex_char_at._onechar $(char_at ${@str} 2)) >= 0 ] $(
+				# 「_」+1文字タグ
+				return "\\_"$(char_at ${@str} 2);
+			) else if $[ $(find sslex_char_at._bracket $(char_at ${@str} 2)) >= 0 ] $(
+				# 「_」+[]で閉じるタグ
+				setstr @len $(match ${@str} "]");
+				if $[ ${@len} == -1 ] $(setstr @len $[ $(length ${@str}) - 1 ]);
+				return "\\"$(substr ${@str} 1 ${@len});
+			);
+		);
+	) else $(
+		# さくらスクリプト以外の1文字
+		return $(char_at ${@str} 0);
+	);
+);
+=end
+
+# sslex_char_atコマンド内部で使用しているエントリ群
+sslex_char_at.onechar : "\\" , c , e , t , v , x , "-" , "*" , 4 , 5
+sslex_char_at.onechar : h , u , 0 , 1
+sslex_char_at.bracket : b , i , j , q , s , "!" , "&"
+sslex_char_at._onechar : V
+sslex_char_at._onechar : n , q , s
+sslex_char_at._bracket : b , l , m , u , w

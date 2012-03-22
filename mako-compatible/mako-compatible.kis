@@ -1,0 +1,50 @@
+=kis
+# mako.exe互換コマンド「mako_compatible」
+# 第1引数: ファイル名  shiori.dllのあるフォルダからの相対指定
+# 第2引数: 正規表現パターン  詳しくはbregexpのページ、string.dllのマニュアルで
+# 戻り値 : 正規表現にマッチした文字列、またはエラーメッセージ
+# 備考   : string.dllを「string」というaliasでsaoriregistすること
+#          エラーメッセージ、動作はおおむねmako.exeと互換
+#          複数の括弧のある正規表現を与えた場合、最後の括弧の内容を返す
+#          マッチした最初の行について処理を行う
+#
+# エラーメッセージ一覧:
+# invalid_argument    : 引数が2個ではなかった
+# file_open_failed    : 指定したファイルが無かった
+# bregexp_load_failed : string.dllとbregexp.dllが無い
+# not_matched         : マッチする文字列がファイル中に無かった
+#
+# 使い方(例)
+# $(mako_compatible url.txt "/http:\/\/d\.hatena\.ne\.jp\/([A-Za-z0-9\-]+)/"
+#   ファイル「url.txt」から、はてなダイアリーURLのid部分を抽出
+#
+function mako_compatible $(
+	if $[ $(.size @arg) != 3 ] $(return "invalid_argument");
+
+	# string.dll(=bregexp.dll)の存在チェック
+	.saorilist @saorilist;
+	if $[ $(.find @saorilist string) == -1 ] $(return "bregexp_load_failed");
+	# ファイルの存在チェック
+	if $[ ! $(.isexist $@arg[1]) ] $(return "file_open_failed");
+
+	# テキストファイル読み込み
+	.textload @text $@arg[1];
+
+	# テキストファイルを行ごとにスキャン
+	loop $(.size @text) $(
+		.setstr @i ${-1};
+		if $(.callsaori string match $@text[${@i}] $@arg[2]) $(
+			# マッチした
+			.setstr @ret $(.callsaori string get 0);
+			# 一番最後の括弧の内容を取得する
+			.setstr @j 1;
+			while $(.setstr @a $(.callsaori string get ${@j});.length ${@a}) $(
+				.inc @j;
+				.setstr @ret ${@a};
+			);
+			return ${@ret};
+		);
+	);
+	return "not_matched";
+);
+=end

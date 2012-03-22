@@ -1,0 +1,30 @@
+# raisesaoriコマンド
+# 第1引数:     呼ぶSAORIモジュールのエイリアス名
+# 第2引数以降: SAORIモジュールに与える引数(省略可能)
+=kis
+function raisesaori $(
+	if $[ $(size @arg) < 2 ] $(return);
+
+	echo "\![raise,OnSaoriRaise,"$@arg[1];
+	clear @arg[0..1];
+	foreach @i @arg $(
+		echo ","${@i};
+	);
+	echo "]";
+);
+=end
+
+=dict
+System.Callback.OnGET : $(
+	if $[ ${System.Request.ID} == "OnSaoriRaise" ] $(
+		clear @ref;
+		setstr @i 0;
+		while $(size System.Request.Reference${@i}) $(
+			pushstr @ref ${System.Request.Reference${@i}};
+			inc @i;
+		);
+		xargs @ref callsaori;
+		silent;
+	);
+)
+=end

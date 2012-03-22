@@ -1,0 +1,109 @@
+# GetWordSyncコマンド(エントリからランダムに単語を重複せずに呼び出す)
+# 第1引数 : エントリ名
+# 戻り値  : エントリ内の単語
+# 備考    : 「エントリ名.buffer」というエントリを占有する
+=kis
+function  GetWordSync $(
+	if $[ $(.size @arg) != 2] $(return);
+	if $[ $(.size $@arg[1].buffer) == 0 ] $(.copy $@arg[1] $@arg[1].buffer);
+
+	.setstr @pos $(.rand $(.size $@arg[1].buffer));
+	.get $@arg[1].buffer[${@pos}];
+	.clear $@arg[1].buffer[${@pos}];
+	if $[ $(.find kp.nonoverlapsync $@arg[1].buffer) < 0 ] $(
+		.pushstr kp.nonoverlapsync $@arg[1].buffer;
+	);
+);
+=end
+
+# Nonoverlap.Syncコマンド(指定エントリを単語重複せず呼び出すエントリ化する)
+# 第1引数 : エントリ名
+# 戻り値  : なし
+# 備考    : 「エントリ名.backup」、「エントリ名.backup.buffer」という
+#           エントリを占有する
+#           GetWordRandomコマンドが必要
+=kis
+function Nonoverlap.Sync $(
+	if $[ $(.size $@arg[1].backup) == 0 ] $(.copy $@arg[1] $@arg[1].backup);
+	.set $@arg[1] "$(GetWordSync "$@arg[1]".backup)";
+	.writeprotect $@arg[1];
+	.writeprotect $@arg[1].backup;
+);
+=end
+
+# コールバックに同期して、重複回避のためにバッファ消去
+System.Callback.OnGET, System.Callback.OnNOTIFY : $(
+	while $(.size kp.nonoverlapsync) $(.clear $(.pop kp.nonoverlapsync));
+)
+
+=kis
+# 第1引数 : エントリ名
+# 戻り値  : エントリ内の単語
+# 備考    : 「エントリ名.buffer」というエントリを占有する
+
+function GetWordHistorical $(
+	if $[ $(.size @arg) != 2 ] $(return);
+	if $[ $(.size $@arg[1].buffer) == 0 ] $(
+		.copy $@arg[1] @temp;
+		while $(.size @temp) $(
+			.setstr @i $(.rand $(.size @temp));
+			.push $@arg[1].buffer $(.getcode @temp[${@i}]);
+			.clear @temp[${@i}];
+		);
+	);
+	.set @s $(.popcode $@arg[1].buffer);
+	.insert $@arg[1].buffer[$[ $(.rand $(.size $@arg[1].buffer)) / 2 ]] $(.getcode @s);
+	return ${@s};
+);
+=end
+
+=kis
+# Historicalコマンド(履歴を使い指定エントリを単語重複せず呼び出すエントリ化する)
+# 第1引数 : エントリ名
+# 備考    : 「エントリ名.backup」、「エントリ名.backup.buffer」という
+#           エントリを占有する
+#           GetWordHistoricalコマンドが必要
+function Historical $(
+	if $[ $(.size @arg) != 2 ] $(return);
+	if $[ $(.size $@arg[1].backup) == 0 ] $(.copy $@arg[1] $@arg[1].backup);
+	.set $@arg[1] "$(GetWordHistorical "$@arg[1]".backup)";
+	.writeprotect $@arg[1];
+	.writeprotect $@arg[1].backup;
+);
+=end
+
+#------------------------------------------------------------------------------
+
+# GetWordRSequentialコマンド(エントリを最後尾から順に呼び出す)
+# 第1引数 : エントリ名
+# 戻り値  : エントリ内の単語
+# 備考    : 「エントリ名.pos」というエントリを占有する
+=kis
+function GetWordRSequential $(
+	if $[ $(.size @arg) != 2] $(return);
+	if $[ $(.size $@arg[1].pos) == 0 ] $(
+		.setstr $@arg[1].pos $[ $(.size $@arg[1]) - 1 ];
+	);
+
+	.get $@arg[1][${$@arg[1].pos}];
+	.dec $@arg[1].pos;
+	if $[ ${$@arg[1].pos} < 0 ] $(
+		.setstr $@arg[1].pos $[ $(.size $@arg[1]) - 1 ];
+	);
+);
+=end
+
+# RSequentialコマンド(指定エントリを添え字降順に呼び出すエントリ化する)
+# 第1引数 : エントリ名
+# 戻り値  : なし
+# 戻り値  : 「エントリ名.backup」、「エントリ名.backup.pos」という
+#           エントリを占有する
+#           GetWordRSequentialコマンドが必要
+=kis
+function RSequential $(
+	if $[ $(.size $@arg[1].backup) == 0 ] $(.copy $@arg[1] $@arg[1].backup);
+	.set $@arg[1] "$(GetWordRSequential "$@arg[1]".backup)";
+	.writeprotect $@arg[1];
+	.writeprotect $@arg[1].backup;
+);
+=end

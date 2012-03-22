@@ -1,0 +1,141 @@
+#==============================================================================
+#
+# BrainF*ck処理系 on 華和梨
+#
+# 作者: さとー(shobu@mail.goo.ne.jp)
+# 環境: 華和梨 Phase 8.2.3以降
+# 参照: http://www.kmonos.net/alang/etc/brainfuck.php
+# 備考: Public Domain扱いで自由に改造・再配布可
+#
+# Version1.0      2005.09.04    とりあえず「Hello,World!」が動く
+#
+#==============================================================================
+# 命令語リスト(書き換え可能)
+
+bf.cmd (
+	">",
+	"<",
+	"+",
+	"-",
+	".",
+	",",
+	"[",
+	"]"
+)
+
+#==============================================================================
+
+
+#==============================================================================
+# 処理系本体(書き換え不可)
+
+# ">"
+bf.func : $(inc bf.idx)
+
+# "<"
+bf.func : $(dec bf.idx)
+
+# "+"
+bf.func : $(inc bf.mem[${bf.idx}])
+
+# "-"
+bf.func : $(dec bf.mem[${bf.idx}])
+
+# "."
+bf.func : $(chr $bf.mem[${bf.idx}])
+
+# ","
+bf.func : $(setstr bf.mem[${bf.idx}] $(char_at ${bf.cin} ${bf.pcin}) ; inc bf.pcin)
+
+# "["
+bf.func : $(
+	if $bf.mem[${bf.idx}] $(
+		# ループはまだ続く
+		push bf.stk $[ ${bf.pc} + $(length $bf.cmd[6]) ];
+	) else $(
+		# ループ終了
+		setstr @bracket $(match ${bf.code} $bf.cmd[7] ${bf.pc});
+		if $[ ${@bracket} == -1 ] $(
+			# 閉じ括弧が見つからない
+			setstr bf.dpc $(length $bf.cmd[6]);
+		) else $(
+			# 閉じ括弧発見
+			setstr bf.pc ${@bracket};
+			setstr bf.dpc $(length $bf.cmd[7]);
+		);
+	);
+)
+
+# "]"
+bf.func : $(
+	if $bf.mem[${bf.idx}] $(
+		# ループする
+		setstr bf.pc $bf.stk[-1];
+		setstr bf.dpc 0;
+	) else $(
+		# ループ終了なので、ループ用スタックを一個破棄
+		clear bf.stk[-1];
+	);
+)
+
+# メインルーチン
+bf.func : $(
+	while $[ ${bf.pc} < $(length ${bf.code}) ] $(
+		loop $(size bf.cmd) $(
+			# 命令を見つける
+			setstr bf.cno ${-1};
+			if $(match_at ${bf.code} $bf.cmd[${bf.cno}] ${bf.pc}) $(
+				# 命令が見つかったので実行
+				setstr bf.dpc $(length $bf.cmd[${bf.cno}]);
+				get bf.func[${bf.cno}];
+				break;
+			);
+			setstr bf.cno -1;
+		);
+		# PCを進める
+		inc bf.pc $(if $[ ${bf.cno} < 0 ] 1 else ${bf.dpc});
+		clear bf.dpc;
+	);
+)
+
+#------------------------------------------------------------------------------
+# コマンド本体
+# 書式: $(bf ＜ソースファイル＞ [＜入力ファイル(省略可能)＞])
+
+=kis
+function bf $(
+	if $[ $(size @arg) != 2 && $(size @arg) != 3 ] $(return);
+	# 初期化
+	if $(isexist $@arg[1]) $(textload @code $@arg[1]);
+	if $[ $(size @arg) == 3 && $(isexist $@arg[2]) ] $(textload @cin $@arg[2]);
+	setstr bf.code $(if $(size @code) $(get @code) else "");
+	setstr bf.cin $(if $(size @cin) $(get @cin) else "");
+	setstr bf.pcin 0;
+	setstr bf.mem[0..65535] 0;
+	setstr bf.idx 0;
+	setstr bf.pc 0;
+	clear bf.stk;
+	# メインルーチン起動
+	get bf.func[-1];
+);
+=end
+
+#==============================================================================
+
+
+#==============================================================================
+# エントリ解説
+#
+# bf.cmd  : 命令語リスト
+# bf.func : 機能、命令単語と対応する順番に書く、最後にメインルーチンを配置
+# bf.mem  : メモリ空間
+# bf.idx  : メモリ空間のインデックスポインタ
+# bf.pc   : bfプログラムカウンタ
+# bf.dpc  : bfプログラムカウンタの増分
+# bf.stk  : bfプログラムカウンタのスタック
+# bf.cin  : 入力ストリーム
+# bf.pcin : 入力ストリームポインタ
+# bf.cno  : 実行中の命令番号(0オリジン)
+# bf.code : bfのプログラムソース
+#
+#==============================================================================

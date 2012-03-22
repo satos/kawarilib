@@ -1,0 +1,71 @@
+=kis
+loglevel error warning info decl;
+logfile debug.log;
+
+load uAIMS.kis;
+
+MicroAIMS a;
+
+a.adddb りんご 種類 果物;
+a.adddb みかん 種類 果物;
+a.adddb バナナ 種類 果物;
+a.adddb きゅうり 種類 野菜;
+a.adddb レタス 種類 野菜;
+a.adddb トマト 種類 野菜;
+a.adddb 食べ物 一種 果物;
+a.adddb 食べ物 一種 野菜;
+a.adddb 料理 種類 食べ物;
+a.adddb 料理 一種 野菜炒め;
+a.adddb 料理 一種 サラダ;
+a.adddb 野菜炒め 材料 野菜;
+a.adddb サラダ 材料 野菜;
+a.adddb 料理 一種 フルーツバスケット;
+a.adddb フルーツバスケット 材料 果物;
+a.adddb 野菜 種類 食べ物;
+a.save MyDataBase.kis;
+
+MicroAIMS b a;
+b.save MyDataBaseClone.kis;
+
+a.query_class test りんご;
+foreach @i test $(logprint "りんごの種類: "${@i});
+
+clear test;
+a.query_property test りんご;
+foreach @i test $(logprint "りんごの属性: "${@i});
+
+clear test;
+a.query_sd test りんご 果物;
+foreach @i test $(logprint "りんごと果物の関係: "${@i});
+
+a.deldb りんご 種類;
+a.save MyDataBase2.kis;
+
+clear test;
+a.query_class test りんご;
+foreach @i test $(logprint "りんごの種類: "${@i});
+
+clear test;
+a.query_rd test 種類 果物;
+foreach @i test $(logprint "種類が果物: "${@i});
+
+cleartree test;
+clear @list;
+a.query_s test 料理;
+listtree @list test;
+xargs @list save query_s.kis;
+
+cleartree test;
+clear @list;
+a.query_r test 一種;
+listtree @list test;
+xargs @list save query_r.kis;
+
+cleartree test;
+clear @list;
+a.query_d test 果物;
+listtree @list test;
+xargs @list save query_d.kis;
+
+
+=end

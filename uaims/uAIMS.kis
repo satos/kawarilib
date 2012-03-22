@@ -1,0 +1,836 @@
+#----------------------------------------------------------------------------
+#
+# μAIMS(KIS)
+# AIMS-1/2/3のKISによる再実装
+#
+#      Ruby版 Programed by NAKAUE.T (Meister)
+#      KIS版  Programed by Sato.S (さとー)
+#
+#  2003.06.09  Version 0.1.0  μAIMS(Ruby) Ver. 0.1.0から移植
+#  2003.08.08                 データ構造を見直し、deldbメソッド追加
+#  2003.08.13                 query_propertyメソッド、query_sdメソッド追加
+#  2003.08.15  Version 0.2.0  逆引き辞書追加、query_rdメソッド追加
+#                             query_rメソッド追加、query_dメソッド追加
+#
+# このソフトウェアはPublic Domain Softwareです。
+# 自由に利用・改変して構いません。
+# 改変の有無にかかわらず、自由に再配布することが出来ます。
+# 作者はこのソフトウェアに関して、全ての権利と全ての義務を放棄します。
+#
+# このライブラリで使用している三項データベースの詳細は、以下を参照下さい。
+# http://www.rogiken.org/aims/pdf/AIMS-1-3.pdf
+#
+#----------------------------------------------------------------------------
+# データ構造
+#
+# MicroAIMS.db.(DB)                      : "MicroAIMS"
+# MicroAIMS.db.(DB).Value                : 全てのsの集合
+# MicroAIMS.db.(DB).Tree.(s_ID)          : s_IDに対応するsの内容
+# MicroAIMS.db.(DB).Value.(s_ID)         : s_IDのsが持つ全てのrの集合
+# MicroAIMS.db.(DB).Tree.(s_ID).(r_ID)   : r_IDに対応するrの内容
+# MicroAIMS.db.(DB).Value.(s_ID).(r_ID)  : 「sのrはd」に該当するdの集合
+# MicroAIMS.db.(DB).RValue               : 全てのdの集合
+# MicroAIMS.db.(DB).RTree.(d_ID)         : d_IDに対応するdの内容
+# MicroAIMS.db.(DB).RValue.(d_ID)        : d_IDのdが持つ全てのrの集合
+# MicroAIMS.db.(DB).RTree.(d_ID).(r_ID)  : r_IDに対応するrの内容
+# MicroAIMS.db.(DB).RValue.(d_ID).(r_ID) : 「sのrはs」に該当するsの集合
+#
+#   *1 (DB)はデータベースの名前
+#   *2 (s_ID)、(r_ID)、(d_ID)は非負整数
+#
+#----------------------------------------------------------------------------
+
+# MicroAIMSの識別子、バージョン
+MicroAIMS     : "MicroAIMS"
+MicroAIMS.ver : "0.2.0"
+
+# MicroAIMSに所属するメソッド
+MicroAIMS.method (
+	save,
+	adddb_sub,
+	adddb,
+	delid,
+	deldb_sub,
+	deldb,
+	query_id,
+	query_srd,
+	query_s,
+	query_r,
+	query_d,
+	query_sr,
+	query_sd,
+	query_rd,
+	query_property,
+	query_class,
+	query_class_sub,
+	deduce_sr
+)
+
+# 内部で作業用に以下のエントリを使用する
+#   MicroAIMS.temporary.*
+#   MicroAIMS.stack.<DB名>
+
+#----------------------------------------------------------------------------
+
+=kis
+# DBの宣言
+# 第1引数 : DB名
+# 第2引数 : コピー元DB名(省略可能)
+# 戻り値  : 無し
+function MicroAIMS $(
+	if $[ $(size @arg) != 2 && $(size @arg) != 3 ] $(return);
+
+	setstr @newdb $@arg[1];
+	setstr @srcdb $@arg[2];
+
+	# 初期化
+	if $[ $(size @arg) == 3 ] $(
+		# コピーによる初期化
+		if $[ ${MicroAIMS.db.${@srcdb}} =~ ${MicroAIMS} ] $(
+			cleartree MicroAIMS.db.${@newdb};
+			copytree MicroAIMS.db.${@srcdb} MicroAIMS.db.${@newdb};
+		);
+	);
+	if $[ ${MicroAIMS.db.${@newdb}} !~ ${MicroAIMS} ] $(
+		# 新規DBの初期化
+		cleartree MicroAIMS.db.${@newdb};
+		setstr MicroAIMS.db.${@newdb} ${MicroAIMS};
+	);
+
+	# メソッドを定義
+	foreach @m MicroAIMS.method $(
+		eval "$(function "${@newdb}"."${@m}" "$(function MicroAIMS.${@m})")";
+	);
+);
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# DBの保存
+# 第1引数 : DBを保存するファイル名
+# 戻り値  : 無し
+function MicroAIMS.save $(
+	if $[ $(size @arg) != 2 ] $(return);
+
+	setstr @db MicroAIMS.db.$(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @savefile $@arg[1];
+
+	if $[ ${@db} =~ ${MicroAIMS} ] $(
+		listtree @list ${@db};
+		xargs @list save ${@savefile};
+	);
+)
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# データベースへの追加(ツリーの1データ分)
+# 第1引数 : s
+# 第2引数 : r
+# 第3引数 : d
+# 第4引数 : 「rev」で逆引き辞書へ追加(省略可能)
+# 戻り値  : 無し
+function MicroAIMS.adddb_sub $(
+	if $[ $(size @arg) != 4 && $(size @arg) != 5 ] $(return);
+
+	setstr @cmd $(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @db MicroAIMS.db.${@cmd};
+	set @q_s $@arg[1];
+	set @q_r $@arg[2];
+	set @q_d $@arg[3];
+	if $[ $@arg[4] == "rev" ] $(
+		setstr @Tree "RTree";
+		setstr @Value "RValue";
+	) else $(
+		setstr @Tree "Tree";
+		setstr @Value "Value";
+	);
+
+	# sのid確定
+	listsub @s_list ${@db}.${@Tree};
+	if $[ $(find ${@db}.${@Value} $(getcode @q_s)) >=0 ] $(
+		# 既に存在するsだった
+		foreach @s @s_list $(
+			# ツリーのsノードには値は1つだけ
+			if $[ $(getcode ${@s}) == $(getcode @q_s) ] $(
+				setstr @s_id ${@s};
+				break;
+			);
+		);
+	) else $(
+		# 知らないsだった
+		setstr @i $(size @s_list);
+		until $[ $(size ${@db}.${@Tree}.${@i}) == 0 ] $(inc @i);
+		setstr @s_id ${@db}.${@Tree}.${@i};
+		set ${@s_id} $(getcode @q_s);
+		push ${@db}.${@Value} $(getcode @q_s);
+	);
+
+	# rのid確定
+	listsub @r_list ${@s_id};
+	setstr @r_value $(sub ${@s_id} ${@db}.${@Tree} ${@db}.${@Value});
+	if $[ $(find ${@r_value} $(getcode @q_r)) >= 0 ] $(
+		# 既にこのsに存在するrだった
+		foreach @r @r_list $(
+			if $[ $(getcode ${@r}) == $(getcode @q_r) ] $(
+				setstr @id ${@r};
+				break;
+			);
+		);
+	) else $(
+		# 知らないrだった
+		setstr @i $(size @r_list);
+		until $[ $(size ${@s_id}.${@i}) == 0 ] $(inc @i);
+		setstr @id ${@s_id}.${@i};
+		set ${@id} $(getcode @q_r);
+		push $(sub ${@s_id} ${@db}.${@Tree} ${@db}.${@Value}) $(getcode @q_r);
+	);
+
+	# dの挿入
+	setstr @d_value $(sub ${@id} ${@db}.${@Tree} ${@db}.${@Value});
+	if $[ $(find ${@d_value} $(getcode @q_d)) < 0 ] $(
+		# 知らないdならば追加
+		push ${@d_value} $(getcode @q_d);
+	);
+);
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# データベースへの追加
+# 第1引数 : s
+# 第2引数 : r
+# 第3引数 : d
+# 戻り値  : 無し
+function MicroAIMS.adddb $(
+	if $[ $(size @arg) != 4 ] $(return);
+
+	setstr @cmd $(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @db MicroAIMS.db.${@cmd};
+	set @q_s $@arg[1];
+	set @q_r $@arg[2];
+	set @q_d $@arg[3];
+
+	${@cmd}.adddb_sub $(getcode @q_s) $(getcode @q_r) $(getcode @q_d);
+	${@cmd}.adddb_sub $(getcode @q_d) $(getcode @q_r) $(getcode @q_s) rev;
+
+	# 「一種」、「種類」を自動定義
+	if $[ ${@q_r} == "種類" &&
+		! $(${@cmd}.query_srd $(getcode @q_d) 一種 $(getcode @q_s)) ] $(
+		${@cmd}.adddb $(getcode @q_d) 一種 $(getcode @q_s);
+	);
+	if $[ ${@q_r} == "一種" &&
+		! $(${@cmd}.query_srd $(getcode @q_d) 種類 $(getcode @q_s)) ] $(
+		${@cmd}.adddb $(getcode @q_d) 種類 $(getcode @q_s);
+	);
+);
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# 辞書から削除
+# 第1引数 : s
+# 第2引数 : r
+# 第3引数 : d
+# 第4引数 : 「rev」で逆引き辞書から削除(省略可能)
+# 戻り値  : 無し
+function MicroAIMS.delid $(
+	if $[ $(size @arg) != 4 && $(size @arg) != 5 ] $(return);
+
+	setstr @cmd $(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @db MicroAIMS.db.${@cmd};
+	set @q_s $@arg[1];
+	set @q_r $@arg[2];
+	set @q_d $@arg[3];
+	if $[ $@arg[4] == "rev" ] $(
+		setstr @Tree "RTree";
+		setstr @Value "RValue";
+		setstr @d_id $(${@cmd}.query_id $(getcode @q_s) $(getcode @q_r) rev);
+	) else $(
+		setstr @Tree "Tree";
+		setstr @Value "Value";
+		setstr @d_id $(${@cmd}.query_id $(getcode @q_s) $(getcode @q_r));
+	);
+
+	# 存在しないS、R、Dなら終了
+	if $[ ${@d_id} == "" ] $(return);
+	if $[ $(find ${@db}.${@Value}.${@d_id} $(getcode @q_d)) < 0 ] $(return);
+
+	# sのidの確定
+	listsub @s_list ${@db}.${@Tree};
+	foreach @s @s_list $(
+		# ツリーのsノードには値は1つだけ
+		if $[ $(getcode ${@s}) == $(getcode @q_s) ] $(
+			setstr @s_id ${@s};
+			break;
+		);
+	);
+
+	# rのid確定
+	listsub @r_list ${@s_id};
+	foreach @r @r_list $(
+		# ツリーのrノードには値は1つだけ
+		if $[ $(getcode ${@r}) == $(getcode @q_r) ] $(
+			setstr @id ${@r};
+			break;
+		);
+	);
+
+	# dの削除
+	setstr @d_value $(sub ${@id} ${@db}.${@Tree} ${@db}.${@Value});
+	clear ${@d_value}[$(find ${@d_value} $(getcode @q_d))];
+
+	if $[ $(size ${@d_value}) == 0 ] $(
+		# この[s、r]にはdが無くなったので、rも消す
+		clear ${@id};
+		setstr @r_value $(sub ${@s_id} ${@db}.${@Tree} ${@db}.${@Value});
+		clear ${@r_value}[$(find ${@r_value} $(getcode @q_r))];
+		if $[ $(size ${@r_value}) == 0 ] $(
+			# このsにはrもなくなったので、sも消す
+			clear ${@s_id};
+			setstr @s_value ${@db}.${@Value};
+			clear ${@s_value}[$(find ${@s_value} $(getcode @q_s))];
+		);
+	);
+);
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# データベースから削除(個別のd)
+# 第1引数 : s
+# 第2引数 : r
+# 第3引数 : d
+# 戻り値  : 無し
+function MicroAIMS.deldb_sub $(
+	if $[ $(size @arg) != 4 ] $(return);
+
+	setstr @cmd $(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @db MicroAIMS.db.${@cmd};
+	set @q_s $@arg[1];
+	set @q_r $@arg[2];
+	set @q_d $@arg[3];
+
+	${@cmd}.delid $(getcode @q_s) $(getcode @q_r) $(getcode @q_d);
+	${@cmd}.delid $(getcode @q_d) $(getcode @q_r) $(getcode @q_s) rev;
+
+	# 「一種」、「種類」を自動削除
+	if $[ ${@q_r} == "一種" &&
+		$(${@cmd}.query_srd $(getcode @q_d) 種類 $(getcode @q_s)) ] $(
+		${@cmd}.deldb_sub $(getcode @q_d) 種類 $(getcode @q_s);
+	);
+	if $[ ${@q_r} == "種類" &&
+		$(${@cmd}.query_srd $(getcode @q_d) 一種 $(getcode @q_s)) ] $(
+		${@cmd}.deldb_sub $(getcode @q_d) 一種 $(getcode @q_s);
+	);
+);
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# データベースから削除
+# 第1引数 : s
+# 第2引数 : r
+# 第3引数 : d(省略可能)
+# 戻り値  : 無し
+function MicroAIMS.deldb $(
+	if $[ $(size @arg) != 4 && $(size @arg) != 3 ] $(return);
+
+	setstr @cmd $(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @db MicroAIMS.db.${@cmd};
+	set @q_s $@arg[1];
+	set @q_r $@arg[2];
+	set @q_d $@arg[3];
+
+	if $[ $(size @arg) == 4 ] $(
+		# 個別のs、r、dを消去
+		${@cmd}.deldb_sub $(getcode @q_s) $(getcode @q_r) $(getcode @q_d);
+		return;
+	);
+
+	# s、rに該当する全てのdを消去
+	move MicroAIMS.temporary @temp;
+	setstr @query $(${@cmd}.query_sr MicroAIMS.temporary $(getcode @q_s) $(getcode @q_r));
+	move MicroAIMS.temporary @d;
+	move @temp MicroAIMS.temporary;
+	if ${@query} $(
+		loop $(size @d) $(
+			setstr @i ${-1};
+			${@cmd}.deldb_sub $(getcode @q_s) $(getcode @q_r) $(getcode @d[${@i}]);
+		);
+	);
+);
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# SのRなID名を求める
+# 第1引数 : s
+# 第2引数 : r
+# 第3引数 : 「rev」なら逆引き辞書を検索(省略可能)
+# 戻り値  : 該当ありの場合「(s_id).(r_id)」
+function MicroAIMS.query_id $(
+	if $[ $(size @arg) != 3 && $(size @arg) != 4 ] $(return);
+
+	setstr @cmd $(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @db MicroAIMS.db.${@cmd};
+	set @q_s $@arg[1];
+	set @q_r $@arg[2];
+	if $[ $@arg[3] == "rev" ] $(
+		setstr @Tree "RTree";
+		setstr @Value "RValue";
+	) else $(
+		setstr @Tree "Tree";
+		setstr @Value "Value";
+	);
+
+	# sのid確定
+	# 知らないsだったらreturn
+	if $[ $(find ${@db}.${@Value} $(getcode @q_s)) < 0 ] $(return);
+	# 存在するsだった
+	listsub @s_list ${@db}.${@Tree};
+	foreach @s @s_list $(
+		if $[ $(getcode ${@s}) == $(getcode @q_s) ] $(
+			setstr @s_id ${@s};
+			break;
+		);
+	);
+
+	# rのid確定
+	# 知らないrだったらreturn
+	if $[ $(find $(sub ${@s_id} ${@db}.${@Tree} ${@db}.${@Value}) $(getcode @q_r)) < 0 ] $(return);
+	# このsに存在するrだった
+	listsub @r_list ${@s_id};
+	foreach @r @r_list $(
+		if $[ $(getcode ${@r}) == $(getcode @q_r) ] $(
+			setstr @id ${@r};
+			break;
+		);
+	);
+
+	return $(sub ${@id} ${@db}"."${@Tree}"." "");
+);
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# SのRはD？
+# 第1引数 : s
+# 第2引数 : r
+# 第3引数 : d
+# 戻り値  : 該当ありの場合true、無しの場合false
+function MicroAIMS.query_srd $(
+	if $[ $(size @arg) != 4 ] $(return);
+
+	setstr @cmd $(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @db MicroAIMS.db.${@cmd};
+	set @q_s $@arg[1];
+	set @q_r $@arg[2];
+	set @q_d $@arg[3];
+
+	setstr @id $(${@cmd}.query_id $(getcode @q_s) $(getcode @q_r));
+	if $[ ${@id} == "" ] $(return "false");
+
+	# 知らないdだったらfalse
+	setstr @d_value ${@db}".Value."${@id};
+	if $[ $(find ${@d_value} $(getcode @q_d)) < 0 ] $(return "false");
+	# ここまで来るのは、srdだった場合
+	return "true";
+);
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# Sについての知識を列挙
+# 第1引数 : 出力先エントリのルート名
+# 第2引数 : s
+# 戻り値  : 該当ありの場合、ツリーの大きさ
+function MicroAIMS.query_s $(
+	if $[ $(size @arg) != 3 ] $(return);
+
+	setstr @cmd $(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @db MicroAIMS.db.${@cmd};
+	setstr @stack $@arg[1];
+	set @q_s $@arg[2];
+
+	# 存在しないsならば終了
+	if $[ $(find ${@db}.Value $(getcode @q_s)) < 0 ] $(return);
+
+	# sのidを取得
+	listsub @snode ${@db}.Tree;
+	foreach @s @snode $(
+		if $[ $(getcode ${@s}) == $(getcode @q_s) ] $(
+			setstr @s_id ${@s};
+			break;
+		);
+	);
+	# 該当srdを格納する一時エントリツリー
+	cleartree @ans;
+	# srdのノード番号
+	setstr @node 0;
+	listsub @rnode ${@s_id};
+	foreach @r @rnode $(
+		# @rは1個のrを格納しているエントリ名
+		# @d_valueはdを格納しているエントリ名
+		setstr @d_value $(sub ${@r} ${@db}.Tree ${@db}.Value);
+		loop $(size ${@d_value}) $(
+			setstr @i ${-1};
+			push @ans.${@node} $(getcode @q_s);
+			push @ans.${@node} $(getcode ${@r});
+			push @ans.${@node} $(getcode ${@d_value}[${@i}]);
+			inc @node;
+		);
+	);
+
+	if $[ ${@node} != 0 ] $(
+		# ノードが1つでもあればスタックに返す
+		copytree @ans ${@stack};
+		return ${@node};
+	);
+);
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# Rについての知識を列挙
+# 第1引数 : 出力先エントリのルート名
+# 第2引数 : r
+# 戻り値  : 該当ありの場合、ツリーの大きさ
+function MicroAIMS.query_r $(
+	if $[ $(size @arg) != 3 ] $(return);
+
+	setstr @cmd $(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @db MicroAIMS.db.${@cmd};
+	setstr @stack $@arg[1];
+	set @q_r $@arg[2];
+
+	# 該当srdを格納する一時エントリツリー
+	cleartree @ans;
+	# srdのノード番号
+	setstr @node 0;
+
+	listsub @s_list ${@db}.Tree;
+	foreach @s @s_list $(
+		setstr @r_value $(sub ${@s} ${@db}.Tree ${@db}.Value);
+		if $[ $(find ${@r_value} $(getcode @q_r)) >= 0 ] $(
+			clear @d;
+			move MicroAIMS.temporary @temp;
+			setstr @query $(${@cmd}.query_sr MicroAIMS.temporary $(getcode ${@s}) $(getcode @q_r));
+			move MicroAIMS.temporary @d;
+			move @temp MicroAIMS.temporary;
+			loop $(size @d) $(
+				setstr @i ${-1};
+				push @ans.${@node} $(getcode ${@s});
+				push @ans.${@node} $(getcode @q_r);
+				push @ans.${@node} $(getcode @d[${@i}]);
+				inc @node;
+			);
+		);
+	);
+
+	if $[ ${@node} != 0 ] $(
+		# ノードが1つでもあればスタックに返す
+		copytree @ans ${@stack};
+		return ${@node};
+	);
+);
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# Dについての知識を列挙
+# 第1引数 : 出力先エントリのルート名
+# 第2引数 : d
+# 戻り値  : 該当ありの場合、ツリーの大きさ
+function MicroAIMS.query_d $(
+	if $[ $(size @arg) != 3 ] $(return);
+
+	setstr @cmd $(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @db MicroAIMS.db.${@cmd};
+	setstr @stack $@arg[1];
+	set @q_d $@arg[2];
+
+	# 存在しないdならば終了
+	if $[ $(find ${@db}.RValue $(getcode @q_d)) < 0 ] $(return);
+
+	# dのidを取得
+	listsub @dnode ${@db}.RTree;
+	foreach @d @dnode $(
+		if $[ $(getcode ${@d}) == $(getcode @q_d) ] $(
+			setstr @d_id ${@d};
+			break;
+		);
+	);
+	# 該当srdを格納する一時エントリツリー
+	cleartree @ans;
+	# srdのノード番号
+	setstr @node 0;
+	listsub @rnode ${@d_id};
+	foreach @r @rnode $(
+		# @rは1個のrを格納しているエントリ名
+		# @s_valueはsを格納しているエントリ名
+		setstr @s_value $(sub ${@r} ${@db}.RTree ${@db}.RValue);
+		loop $(size ${@s_value}) $(
+			setstr @i ${-1};
+			push @ans.${@node} $(getcode ${@s_value}[${@i}]);
+			push @ans.${@node} $(getcode ${@r});
+			push @ans.${@node} $(getcode @q_d);
+			inc @node;
+		);
+	);
+
+	if $[ ${@node} != 0 ] $(
+		# ノードが1つでもあればスタックに返す
+		copytree @ans ${@stack};
+		return ${@node};
+	);
+);
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# SのRは何？
+# 第1引数 : 出力先エントリ名
+# 第2引数 : s
+# 第3引数 : r
+# 戻り値  : 該当ありの場合、値の個数
+function MicroAIMS.query_sr $(
+	if $[ $(size @arg) != 4 ] $(return);
+
+	setstr @cmd $(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @db MicroAIMS.db.${@cmd};
+	setstr @stack $@arg[1];
+	set @q_s $@arg[2];
+	set @q_r $@arg[3];
+
+	setstr @id $(${@cmd}.query_id $(getcode @q_s) $(getcode @q_r));
+	if $[ ${@id} == "" ] $(return);
+
+	setstr @d_value ${@db}".Value."${@id};
+	copy ${@d_value} ${@stack};
+	return $(size ${@d_value});
+);
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# Sの何がD？
+# 第1引数 : 出力先エントリ名
+# 第2引数 : s
+# 第3引数 : d
+# 戻り値  : 該当ありの場合、値の個数
+function MicroAIMS.query_sd $(
+	if $[ $(size @arg) != 4 ] $(return);
+
+	setstr @cmd $(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @db MicroAIMS.db.${@cmd};
+	setstr @stack $@arg[1];
+	set @q_s $@arg[2];
+	set @q_d $@arg[3];
+
+	movetree MicroAIMS.temporary @temp;
+	setstr @r_query $(${@cmd}.query_property MicroAIMS.temporary $(getcode @q_s));
+	movetree MicroAIMS.temporary @r;
+	movetree @temp MicroAIMS.temporary;
+
+	if $[ ${@r_query} == "" ] $(return);
+
+	setstr @i 0;
+	loop $(size @r) $(
+		setstr @j ${-1};
+		if $(${@cmd}.query_srd $(getcode @q_s) $(getcode @r[${@j}]) $(getcode @q_d)) $(
+			push ${@stack} $(getcode @r[${@j}]);
+			inc @i;
+		);
+	);
+	return $(if $[ ${@i} > 0 ] ${@i} else "");
+);
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# 何のRはD？
+# 第1引数 : 出力先エントリ名
+# 第2引数 : r
+# 第3引数 : d
+# 戻り値  : 該当ありの場合、値の個数
+function MicroAIMS.query_rd $(
+	if $[ $(size @arg) != 4 ] $(return);
+
+	setstr @cmd $(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @db MicroAIMS.db.${@cmd};
+	setstr @stack $@arg[1];
+	set @q_r $@arg[2];
+	set @q_d $@arg[3];
+
+	setstr @id $(${@cmd}.query_id $(getcode @q_d) $(getcode @q_r) rev);
+	if $[ ${@id} == "" ] $(return);
+
+	setstr @s_value ${@db}".RValue."${@id};
+	copy ${@s_value} ${@stack};
+	return $(size ${@s_value});
+);
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# Sの持っているRを列挙
+# 第1引数 : 出力先エントリ名
+# 第2引数 : s
+# 戻り値  : 該当ありの場合、値の個数
+function MicroAIMS.query_property $(
+	if $[ $(size @arg) != 3 ] $(return);
+
+	setstr @cmd $(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @db MicroAIMS.db.${@cmd};
+	setstr @stack $@arg[1];
+	set @q_s $@arg[2];
+
+	if $[ $(find ${@db}.Value $(getcode @q_s)) < 0 ] $(return);
+
+	listsub @snode ${@db}.Tree;
+	foreach @s @snode $(
+		if $[ $(getcode ${@s}) == $(getcode @q_s) ] $(
+			setstr @r_value $(sub ${@s} ${@db}.Tree ${@db}.Value);
+			copy ${@r_value} ${@stack};
+			return $(size ${@r_value});
+		);
+	);
+);
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# Sの種類(一種)は何？
+# 第1引数 : 出力先エントリ名
+# 第2引数 : s
+# 第3引数 : r(省略可能)
+# 戻り値  : 該当ありの場合、事例の個数
+function MicroAIMS.query_class $(
+	if $[ $(size @arg) != 4 && $(size @arg) != 3 ] $(return);
+
+	setstr @cmd $(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @db MicroAIMS.db.${@cmd};
+	setstr @stack $@arg[1];
+	set @q_s $@arg[2];
+	if $[ $(size @arg) == 3 ] $(
+		set @q_r "種類";
+	) else $(
+		set @q_r $@arg[3];
+	);
+
+	move MicroAIMS.stack.${@db} @temp;
+	${@cmd}.query_class_sub MicroAIMS.stack.${@db} $(getcode @q_s) $(getcode @q_r);
+	move MicroAIMS.stack.${@db} @tempstack;
+	move @temp MicroAIMS.stack.${@db};
+
+	setstr @pos $(find @tempstack $(getcode @q_s));
+	if $[ ${@pos} != -1 ] $(clear @tempstack[${@pos}]);
+
+	copy @tempstack ${@stack};
+	if $(size @tempstack) $(return $(size @tempstack));
+);
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# Sの種類(一種)は何？(ただし解答には*必ず*「Sの種類はS」が含まれる)
+# 第1引数 : 出力先エントリ名
+# 第2引数 : s
+# 第3引数 : r
+# 戻り値  : 無し
+function MicroAIMS.query_class_sub $(
+	if $[ $(size @arg) != 4 ] $(return);
+
+	setstr @cmd $(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @db MicroAIMS.db.${@cmd};
+	setstr @stack $@arg[1];
+	set @q_s $@arg[2];
+	set @q_r $@arg[3];
+
+	if $[ $(find ${@stack} $(getcode @q_s)) < 0 ] $(
+		push ${@stack} $(getcode @q_s);
+	);
+
+	move MicroAIMS.temporary @temp;
+	setstr @query $(${@cmd}.query_sr MicroAIMS.temporary $(getcode @q_s) $(getcode @q_r));
+	move MicroAIMS.temporary @c;
+	move @temp MicroAIMS.temporary;
+	if $[ ${@query} == "" ] $(return);
+
+	loop $(size @c) $(
+		setstr @i ${-1};
+		if $[ $(find ${@stack} $(getcode @c[${@i}])) < 0 ] $(
+			${@cmd}.query_class_sub ${@stack} $(getcode @c[${@i}]) $(getcode @q_r);
+		);
+	);
+);
+=end
+
+#----------------------------------------------------------------------------
+
+=kis
+# SのRは何？(推論付き)
+# 第1引数 : 出力先エントリ名
+# 第2引数 : s
+# 第3引数 : r
+# 戻り値  : 該当ありの場合、値の個数
+function MicroAIMS.deduce_sr $(
+	if $[ $(size @arg) != 4 ] $(return);
+
+	setstr @cmd $(substr $@arg[0] 0 $(rmatch $@arg[0] "."));
+	setstr @db MicroAIMS.db.${@cmd};
+	setstr @stack $@arg[1];
+	set @q_s $@arg[2];
+	set @q_r $@arg[3];
+
+	# rが「種類」か「一種」だったら、query_classが推論そのもの
+	if $[ ${@q_r} == "種類" || ${@q_r} == "一種" ] $(
+		return $(${@cmd}.query_class ${@stack} $(getcode @q_s) $(getcode @q_r));
+	);
+
+	# 一般の場合の推論
+	move MicroAIMS.temporary @temp;
+	setstr @query $(${@cmd}.query_class MicroAIMS.temporary $(getcode @q_s));
+	move MicroAIMS.temporary @s;
+	move @temp MicroAIMS.temporary;
+	push @s $(getcode @q_s);
+
+	loop $(size @s) $(
+		setstr @i ${-1};
+		clear @d;
+		move MicroAIMS.temporary @temp;
+		setstr @query $(${@cmd}.query_sr MicroAIMS.temporary $(getcode @s[${@i}]) $(getcode @q_r));
+		move MicroAIMS.temporary @d;
+		move @temp MicroAIMS.temporary;
+		loop $(size @d) $(
+			setstr @j ${-1};
+			if $[ $(find @tempstack $(getcode @d[${@j}])) < 0 ] $(
+				push @tempstack $(getcode @d[${@j}]);
+			);
+		);
+	);
+
+	copy @tempstack ${@stack};
+	if $(size @tempstack) $(return $(size @tempstack));
+);
+=end
+
+#----------------------------------------------------------------------------
